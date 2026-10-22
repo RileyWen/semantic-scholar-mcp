@@ -338,6 +338,86 @@ class TestApiKeyHeader:
             headers = call_kwargs["headers"]
             assert "x-api-key" not in headers
 
+    @pytest.mark.asyncio
+    async def test_two_keys_rotate_across_get_and_post_requests(
+        self, mock_settings_with_api_key: MagicMock
+    ) -> None:
+        """Outbound requests alternate credentials and have separate limiters."""
+        mock_settings_with_api_key.api_keys = ("key-one", "key-two")
+        limiter_one = MagicMock()
+        limiter_one.acquire = AsyncMock(return_value=0)
+        limiter_two = MagicMock()
+        limiter_two.acquire = AsyncMock(return_value=0)
+
+        with (
+            patch(
+                "semantic_scholar_mcp.client.create_rate_limiter",
+                side_effect=[limiter_one, limiter_two],
+            ),
+            patch("semantic_scholar_mcp.client.httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_client = AsyncMock()
+            mock_client.is_closed = False
+            mock_client.get = AsyncMock(
+                return_value=create_mock_response(status_code=200, json_data={"data": []})
+            )
+            mock_client.post = AsyncMock(
+                return_value=create_mock_response(status_code=200, json_data={"data": []})
+            )
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            async with SemanticScholarClient() as client:
+                await client.get("/paper/search", params={"query": "first"})
+                await client.post("/paper/batch", json_data={"ids": ["123"]})
+                await client.get("/paper/search", params={"query": "second"})
+
+            assert "x-api-key" not in mock_client_class.call_args.kwargs["headers"]
+            assert mock_client.get.call_args_list[0].kwargs["headers"]["x-api-key"] == "key-one"
+            assert mock_client.post.call_args.kwargs["headers"]["x-api-key"] == "key-two"
+            assert mock_client.get.call_args_list[1].kwargs["headers"]["x-api-key"] == "key-one"
+            assert limiter_one.acquire.await_count == 2
+            assert limiter_two.acquire.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_retry_uses_next_key(
+        self, mock_settings_with_api_key: MagicMock
+    ) -> None:
+        """A retry is a new outbound attempt and advances the rotation."""
+        mock_settings_with_api_key.api_keys = ("key-one", "key-two")
+        mock_settings_with_api_key.enable_auto_retry = True
+        mock_settings_with_api_key.retry_max_attempts = 1
+        mock_settings_with_api_key.retry_base_delay = 0.1
+        mock_settings_with_api_key.retry_max_delay = 1.0
+        limiter_one = MagicMock(acquire=AsyncMock(return_value=0))
+        limiter_two = MagicMock(acquire=AsyncMock(return_value=0))
+
+        with (
+            patch(
+                "semantic_scholar_mcp.client.create_rate_limiter",
+                side_effect=[limiter_one, limiter_two],
+            ),
+            patch("semantic_scholar_mcp.client.httpx.AsyncClient") as mock_client_class,
+            patch("semantic_scholar_mcp.rate_limiter.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_client = AsyncMock()
+            mock_client.is_closed = False
+            mock_client.get = AsyncMock(
+                side_effect=[
+                    create_mock_response(status_code=429),
+                    create_mock_response(status_code=200, json_data={"data": []}),
+                ]
+            )
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            async with SemanticScholarClient() as client:
+                assert await client.get_with_retry("/paper/search") == {"data": []}
+
+            assert [
+                call.kwargs["headers"]["x-api-key"] for call in mock_client.get.call_args_list
+            ] == ["key-one", "key-two"]
+
 
 class TestAuthenticationError:
     """Tests for HTTP 401/403 authentication error handling."""

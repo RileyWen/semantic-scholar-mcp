@@ -1,11 +1,22 @@
 """Tests for configuration settings and environment variable handling."""
 
 import os
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
 
 from semantic_scholar_mcp.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def isolate_api_keys() -> Generator[None]:
+    """Keep real shell credentials out of configuration tests and failures."""
+    with patch.dict(
+        os.environ,
+        {"SEMANTIC_SCHOLAR_API_KEY": "", "SEMANTIC_SCHOLAR_API_KEY_LIST": ""},
+    ):
+        yield
 
 
 class TestDefaultConfiguration:
@@ -102,6 +113,28 @@ class TestEnvironmentVariableLoading:
         with patch.dict(os.environ, {"SEMANTIC_SCHOLAR_API_KEY": "test-key-123"}):
             settings = Settings()
             assert settings.api_key == "test-key-123"
+            assert settings.api_keys == ("test-key-123",)
+
+    def test_api_key_list_rotates_unique_trimmed_keys(self) -> None:
+        """The list takes precedence and duplicate credentials are used once."""
+        with patch.dict(
+            os.environ,
+            {
+                "SEMANTIC_SCHOLAR_API_KEY_LIST": " key-one, key-two, key-one, ",
+                "SEMANTIC_SCHOLAR_API_KEY": "legacy-key",
+            },
+        ):
+            settings = Settings()
+            assert settings.api_keys == ("key-one", "key-two")
+            assert settings.api_key == "key-one"
+            assert settings.has_api_key is True
+
+    def test_empty_api_key_list_falls_back_to_legacy_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"SEMANTIC_SCHOLAR_API_KEY_LIST": " , ", "SEMANTIC_SCHOLAR_API_KEY": "legacy-key"},
+        ):
+            assert Settings().api_keys == ("legacy-key",)
 
     def test_retry_max_attempts_from_environment(self) -> None:
         """Test loading retry max attempts from environment."""

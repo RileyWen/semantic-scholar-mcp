@@ -57,7 +57,8 @@ class Settings:
     """Configuration settings loaded from environment variables.
 
     Attributes:
-        api_key: Optional Semantic Scholar API key for higher rate limits.
+        api_keys: Semantic Scholar API keys, in request rotation order.
+        api_key: First configured API key, for compatibility with single-key clients.
         graph_api_base_url: Base URL for the Graph API.
         recommendations_api_base_url: Base URL for the Recommendations API.
         retry_max_attempts: Maximum number of retry attempts for rate limit errors.
@@ -78,11 +79,15 @@ class Settings:
     """
 
     def __init__(self) -> None:
-        # Strip whitespace from API key; treat whitespace-only as missing
-        raw_api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-        self.api_key: str | None = raw_api_key.strip() if raw_api_key else None
-        if self.api_key == "":
-            self.api_key = None
+        # A comma-separated list takes precedence over the legacy single key.
+        # Deduplicate so the same credential cannot accidentally get extra turns.
+        raw_key_list = os.environ.get("SEMANTIC_SCHOLAR_API_KEY_LIST", "")
+        keys = tuple(dict.fromkeys(key.strip() for key in raw_key_list.split(",") if key.strip()))
+        if not keys:
+            raw_api_key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+            keys = (raw_api_key.strip(),) if raw_api_key.strip() else ()
+        self.api_keys: tuple[str, ...] = keys
+        self.api_key: str | None = keys[0] if keys else None
         self.graph_api_base_url: str = "https://api.semanticscholar.org/graph/v1"
         self.recommendations_api_base_url: str = (
             "https://api.semanticscholar.org/recommendations/v1"
@@ -153,7 +158,7 @@ class Settings:
     @property
     def has_api_key(self) -> bool:
         """Check if an API key is configured."""
-        return self.api_key is not None and len(self.api_key) > 0
+        return bool(self.api_keys)
 
 
 settings = Settings()

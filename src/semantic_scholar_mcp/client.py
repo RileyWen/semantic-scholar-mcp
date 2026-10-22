@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -119,7 +120,14 @@ class SemanticScholarClient:
         )
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
-        self._rate_limiter: TokenBucket = create_rate_limiter(settings.has_api_key)
+        self._api_keys = settings.api_keys
+        self._rate_limiters: tuple[TokenBucket, ...] = (
+            tuple(create_rate_limiter(True) for _ in self._api_keys)
+            if self._api_keys
+            else (create_rate_limiter(False),)
+        )
+        self._next_key_index = 0
+        self._key_lock = threading.Lock()
         self._circuit_breaker = CircuitBreaker(
             CircuitBreakerConfig(
                 failure_threshold=settings.circuit_failure_threshold,
@@ -136,9 +144,18 @@ class SemanticScholarClient:
         headers: dict[str, str] = {
             "Accept": "application/json",
         }
-        if settings.has_api_key and settings.api_key:
-            headers["x-api-key"] = settings.api_key
+        if len(self._api_keys) == 1:
+            headers["x-api-key"] = self._api_keys[0]
         return headers
+
+    def _select_key(self) -> tuple[str | None, TokenBucket]:
+        """Assign the next credential and its own rate limiter to one request."""
+        if not self._api_keys:
+            return None, self._rate_limiters[0]
+        with self._key_lock:
+            index = self._next_key_index
+            self._next_key_index = (index + 1) % len(self._api_keys)
+        return self._api_keys[index], self._rate_limiters[index]
 
     def _is_cacheable_post(self, endpoint: str) -> bool:
         """Check if POST endpoint should be cached.
@@ -287,17 +304,22 @@ class SemanticScholarClient:
 
         logger.info("API request: method=%s endpoint=%s params=%s", method, endpoint, params)
 
-        # Acquire rate limit token before making request
-        wait_time = await self._rate_limiter.acquire()
+        # Rotate on every outbound attempt, including retries, and throttle
+        # each credential independently.
+        api_key, rate_limiter = self._select_key()
+        wait_time = await rate_limiter.acquire()
         if wait_time > 0:
             logger.debug("Rate limiter: waited %.2fs before request", wait_time)
 
         client = await self._get_client()
+        request_kwargs: dict[str, Any] = {"params": params}
+        if len(self._api_keys) > 1 and api_key is not None:
+            request_kwargs["headers"] = {"x-api-key": api_key}
         try:
             if method == "POST":
-                response = await client.post(url, json=json_data, params=params)
+                response = await client.post(url, json=json_data, **request_kwargs)
             else:
-                response = await client.get(url, params=params)
+                response = await client.get(url, **request_kwargs)
         except httpx.ConnectError as e:
             raise APIConnectionError(f"Failed to connect to Semantic Scholar API: {e}") from e
         except httpx.TimeoutException as e:

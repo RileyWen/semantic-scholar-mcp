@@ -7,7 +7,10 @@ All settings are configured via environment variables. The server works out of t
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SEMANTIC_SCHOLAR_API_KEY` | API key for higher rate limits | (none) |
+| `SEMANTIC_SCHOLAR_API_KEY_LIST` | Comma-separated API keys, rotated for each outbound request; takes precedence over the single key | (none) |
 | `DISABLE_SSL_VERIFY` | Bypass SSL verification for corporate proxies | `false` |
+
+Each distinct key in `SEMANTIC_SCHOLAR_API_KEY_LIST` has its own one-request-per-second limiter. The server rotates keys on every outbound attempt, including retries, even when no rate limit has been reached. Empty entries and duplicate keys are ignored.
 
 ## Default Limits
 

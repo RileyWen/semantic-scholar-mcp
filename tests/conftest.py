@@ -35,6 +35,7 @@ def mock_settings_no_api_key() -> Generator[MagicMock]:
     """Mock settings without an API key configured."""
     with patch("semantic_scholar_mcp.client.settings") as mock_settings:
         mock_settings.api_key = None
+        mock_settings.api_keys = ()
         mock_settings.has_api_key = False
         mock_settings.graph_api_base_url = "https://api.semanticscholar.org/graph/v1"
         mock_settings.recommendations_api_base_url = (
@@ -51,6 +52,7 @@ def mock_settings_with_api_key() -> Generator[MagicMock]:
     """Mock settings with an API key configured."""
     with patch("semantic_scholar_mcp.client.settings") as mock_settings:
         mock_settings.api_key = "test-api-key-12345"
+        mock_settings.api_keys = ("test-api-key-12345",)
         mock_settings.has_api_key = True
         mock_settings.graph_api_base_url = "https://api.semanticscholar.org/graph/v1"
         mock_settings.recommendations_api_base_url = (

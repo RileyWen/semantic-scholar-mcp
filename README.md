@@ -109,6 +109,14 @@ uvx --from git+https://github.com/akapet00/semantic-scholar-mcp semantic-scholar
 
 The server works without an API key. For higher rate limits, get a key at https://www.semanticscholar.org/product/api and pass it as an environment variable.
 
+For multiple keys, set `SEMANTIC_SCHOLAR_API_KEY_LIST` to a comma-separated list:
+
+```bash
+export SEMANTIC_SCHOLAR_API_KEY_LIST="first_key,second_key"
+```
+
+The server uses the keys in round-robin order for every outbound API request, including retries, whether or not a rate limit was reached. Each key is limited independently to one request per second. Cached responses do not make API requests and do not advance the rotation. When the list is set, it takes precedence over the legacy `SEMANTIC_SCHOLAR_API_KEY` variable; the single-key variable remains supported.
+
 | Access Level | Rate Limit |
 |---|---|
 | Without key | 5,000 requests per 5 minutes (shared pool) |
